@@ -9,7 +9,7 @@
 - 相机：CameraX 1.4.1 + ML Kit 人脸检测 16.1.7
 - 端上模型：u2netp（显著目标检测，4.4 MB，ONNX Runtime 1.20.0，CPU）
 - 测试：58 个 JVM 单元测试，不要真机也不要模拟器
-- APK：debug 约 158 MB（ONNX Runtime 四个 ABI 加 4.4 MB 模型；只打 arm64 约 60 MB）
+- APK：debug 约 158 MB（ONNX Runtime 4 个 ABI 加 4.4 MB 模型；只打 arm64 约 60 MB）
 - 网络权限：没有。Manifest 里只有 CAMERA，没有 INTERNET
 
 ## 1. 有什么功能
@@ -50,7 +50,7 @@ scripts/build_apk.ps1               PowerShell 一键构建（会自己写 local
 scripts/install_apk.ps1             PowerShell 一键 adb install -r
 ```
 
-纯逻辑那几个类（`AutoFrame`、`SaliencyMath`、`SubjectLock`、`Rules`、`AutoExposure`、`FocusAssist`）刻意没 `import android.*`，所以拿普通 JVM 就能跑单测。图像算法对不对，大半不用手机、用网格化的数字就能验证，这是整个项目里最省事的一条经验。
+纯逻辑那几个类（`AutoFrame`、`SaliencyMath`、`SubjectLock`、`Rules`、`AutoExposure`、`FocusAssist`）刻意没 `import android.*`，所以拿普通 JVM 就能跑单测。图像算法的正确性 90% 可以在没有手机的情况下用网格化的数字验证，这是整个项目里最省事的一条经验。
 
 ## 3. 三个「智能」是怎么做的
 
@@ -112,7 +112,7 @@ powershell -File .\scripts\build_apk.ps1 -AndroidSdk $env:ANDROID_HOME -JdkHome 
 - `local.properties` 不在仓库里，它指向本机 SDK 路径。第一次构建要么设 `ANDROID_HOME`，要么自己建一行 `sdk.dir=...`。
 - 第一次构建要联网拉依赖（AndroidX / CameraX / ML Kit / ONNX Runtime），之后加 `--offline` 就能离线构建。
 - `u2netp.onnx` 随仓库一起提供，不用下载。
-- 想瘦身就在 `app/build.gradle.kts` 里加 `ndk { abiFilters += "arm64-v8a" }`，APK 从 158 MB 掉到 60 MB 上下，大头是 ONNX Runtime 的四个 ABI。
+- 想瘦身就在 `app/build.gradle.kts` 里加 `ndk { abiFilters += "arm64-v8a" }`，APK 从 158 MB 掉到 60 MB 上下，大头是 ONNX Runtime 的 4 个 ABI。
 
 装机：
 
