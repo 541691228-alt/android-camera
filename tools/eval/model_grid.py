@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""用 u2netp 主体模型把清单里的图片跑成 64x48 显著度网格，打包给 Kotlin harness。
+"""用主体模型把清单里的图片跑成 64x48 显著度网格，打包给 Kotlin harness。
 
 为什么要有这一步：线上自动构图优先用的是 u2netp 的输出（SubjectModel），规则算法
 （AutoFrame.salienceFromArgb）只是模型不可用时的兜底。两套显著图的性格完全不同
@@ -21,6 +21,17 @@
 产出：
     work/grids.bin            200 张连续拼接的 64x48 float32（大端，每张 12288 字节）
     work/grids_manifest.tsv   表头 index<TAB>image<TAB>w<TAB>h<TAB>peak
+
+换别的显著度模型（2026-10-05 加，全部默认值＝ u2netp 现状，不改默认行为）：
+    --side 1024                预处理拉伸边长（u2netp 是 320）
+    --norm unit|half|raw       imagenet(默认) 之外的值域；--mean/--std 可改常量
+    --layout nhwc              默认 nchw，输出布局
+    --channel-order bgr        默认 rgb
+    --output-index 1           取第几个输出（默认 0，＝ Kotlin 侧 res.get(0)）
+    --output-name d0           直接按名字取输出，优先于 --output-index
+    --mask-channel 0           输出带通道维时取哪个通道
+    --mask-resize N            输出边长不等于 --side 时插值到 NxN（默认 0＝按 --side）
+    --threads N                onnxruntime 线程数（默认 2，＝加这个选项之前的行为）
 """
 
 import argparse
@@ -42,32 +53,85 @@ GRID_H = 48
 GRID_PEAK_GATE = 0.75
 MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+IMAGENET_MEAN = "0.485,0.456,0.406"
+IMAGENET_STD = "0.229,0.224,0.225"
 
 
-def preprocess(im: Image.Image) -> np.ndarray:
-    """PIL 图 → (1,3,320,320) float32，与 SaliencyMath.argbToNchw 对齐。"""
-    small = im.convert("RGB").resize((SIDE, SIDE), Image.Resampling.BILINEAR)
-    a = np.asarray(small, dtype=np.float32) / 255.0
-    a = (a - MEAN) / STD
+def parse_triple(text: str, default):
+    if not text:
+        return default
+    vals = [float(x) for x in text.replace(" ", "").split(",") if x]
+    if len(vals) != 3:
+        raise SystemExit("要 3 个逗号分隔的数，收到: %r" % text)
+    return np.array(vals, dtype=np.float32)
+
+
+def preprocess(im: Image.Image, side: int = SIDE, norm: str = "imagenet",
+               mean=None, std=None, layout: str = "nchw", order: str = "rgb") -> np.ndarray:
+    """PIL 图 → (1,3,side,side) float32，与 SaliencyMath.argbToNchw 对齐。
+    side/norm/layout/order 都是 2026-10-05 加的开关，默认值与加之前逐字节一致。"""
+    mk = mean if mean is not None else MEAN
+    sk = std if std is not None else STD
+    small = im.convert("RGB").resize((side, side), Image.Resampling.BILINEAR)
+    a = np.asarray(small, dtype=np.float32)
+    if norm == "raw":
+        pass
+    elif norm == "unit":
+        a = a / 255.0
+    elif norm == "half":
+        a = a / 127.5 - 1.0
+    else:  # imagenet
+        a = a / 255.0
+        a = (a - mk) / sk
+    if order == "bgr":
+        a = a[:, :, ::-1]
+    if layout == "nhwc":
+        return np.ascontiguousarray(a[None, ...], dtype=np.float32)
     return np.ascontiguousarray(np.transpose(a, (2, 0, 1))[None, ...], dtype=np.float32)
 
 
-def mask_to_grid(mask: np.ndarray, cols: int = GRID_W, rows: int = GRID_H) -> np.ndarray:
-    """(320,320) 原始掩膜 → (rows,cols) 0..1 网格，与 SaliencyMath.maskToGrid 对齐。"""
+def mask_to_grid(mask: np.ndarray, cols: int = GRID_W, rows: int = GRID_H,
+                 side: int = None) -> np.ndarray:
+    """(side,side) 原始掩膜 → (rows,cols) 0..1 网格，与 SaliencyMath.maskToGrid 对齐。
+    side 默认取掩膜自己的边长（默认路径下即 320，与加参数之前一致）。"""
+    if side is None:
+        side = int(mask.shape[0])
     mn = float(mask.min())
     mx = float(mask.max())
     rng = mx - mn
     stretch = rng > 1e-6
     out = np.zeros((rows, cols), dtype=np.float32)
     for r in range(rows):
-        y0 = r * SIDE // rows
-        y1 = max(y0 + 1, (r + 1) * SIDE // rows)
+        y0 = r * side // rows
+        y1 = max(y0 + 1, (r + 1) * side // rows)
         for c in range(cols):
-            x0 = c * SIDE // cols
-            x1 = max(x0 + 1, (c + 1) * SIDE // cols)
+            x0 = c * side // cols
+            x1 = max(x0 + 1, (c + 1) * side // cols)
             blk = mask[y0:y1, x0:x1]
             out[r, c] = float(((blk - mn) / rng).mean()) if stretch else 0.0
     return out
+
+
+def pick_mask(raw, mask_channel: int, mask_resize: int, sigmoid: bool = False) -> np.ndarray:
+    """把 onnx 输出压成 2D float32 掩膜；边长不等于目标时双线性插值。
+    sigmoid=True 给那些输出还是 logits 的模型（如 BiRefNet_lite，实测值域 -14.7..101.5）。"""
+    arr = np.asarray(raw, dtype=np.float32)
+    if sigmoid:
+        arr = 1.0 / (1.0 + np.exp(-arr))
+    arr = np.squeeze(arr)
+    if arr.ndim == 3:
+        # (C,H,W) 还是 (H,W,C)：小的一维当前导通道判断
+        if arr.shape[0] <= 4 and arr.shape[0] < arr.shape[-1]:
+            arr = arr[mask_channel]
+        else:
+            arr = arr[..., mask_channel]
+    if arr.ndim != 2:
+        raise ValueError("输出压不成 2D，shape=%s" % (np.asarray(raw).shape,))
+    if mask_resize and arr.shape != (mask_resize, mask_resize):
+        mi = Image.fromarray(arr.astype(np.float32), mode="F")
+        arr = np.asarray(mi.resize((mask_resize, mask_resize), Image.Resampling.BILINEAR),
+                         dtype=np.float32)
+    return arr
 
 
 def read_manifest(path: str):
@@ -90,6 +154,23 @@ def main() -> int:
     ap.add_argument("--manifest", default=os.path.join("work", "manifest.tsv"))
     ap.add_argument("--out-dir", default="work")
     ap.add_argument("--model", default=os.path.join("app", "src", "main", "assets", "u2netp.onnx"))
+    # 以下选项的默认值都等于"只有 u2netp 那会儿"的行为
+    ap.add_argument("--side", type=int, default=SIDE, help="预处理拉伸边长，默认 %d" % SIDE)
+    ap.add_argument("--norm", default="imagenet", choices=["imagenet", "unit", "half", "raw"],
+                    help="值域处理，默认 imagenet=(px/255-mean)/std")
+    ap.add_argument("--mean", default="", help="norm=imagenet 的 mean，逗号分隔；默认 ImageNet")
+    ap.add_argument("--std", default="", help="norm=imagenet 的 std，逗号分隔；默认 ImageNet")
+    ap.add_argument("--layout", default="nchw", choices=["nchw", "nhwc"], help="输入布局，默认 nchw")
+    ap.add_argument("--channel-order", default="rgb", choices=["rgb", "bgr"], help="默认 rgb")
+    ap.add_argument("--output-index", type=int, default=0, help="取第几个输出，默认 0")
+    ap.add_argument("--output-name", default="", help="按名字取输出，优先于 --output-index")
+    ap.add_argument("--mask-channel", type=int, default=0, help="输出带通道维时取哪个通道，默认 0")
+    ap.add_argument("--mask-resize", type=int, default=0,
+                    help="输出边长不等于该值时插值到该边长；0＝按 --side 的边长")
+    ap.add_argument("--sigmoid", action="store_true",
+                    help="输出是 logits 时先过 sigmoid（BiRefNet_lite 实测 -14.7..101.5）")
+    ap.add_argument("--threads", type=int, default=2, help="onnxruntime 线程数，默认 2")
+    ap.add_argument("--progress", type=int, default=0, help="每 N 张打一行进度，0＝不打")
     args = ap.parse_args()
 
     try:
@@ -102,17 +183,22 @@ def main() -> int:
         print("模型不存在: %s" % os.path.abspath(args.model))
         return 1
 
+    mean = parse_triple(args.mean, MEAN) if args.mean else None
+    std = parse_triple(args.std, STD) if args.std else None
+    mask_resize = args.mask_resize or args.side
+
     out_dir = os.path.abspath(args.out_dir)
     os.makedirs(out_dir, exist_ok=True)
     bin_path = os.path.join(out_dir, "grids.bin")
     man_path = os.path.join(out_dir, "grids_manifest.tsv")
 
     opts = ort.SessionOptions()
-    opts.intra_op_num_threads = 2
+    opts.intra_op_num_threads = args.threads
     opts.inter_op_num_threads = 1
     sess = ort.InferenceSession(args.model, opts, providers=["CPUExecutionProvider"])
     in_name = sess.get_inputs()[0].name
     out_names = [o.name for o in sess.get_outputs()]
+    out_name = args.output_name or out_names[args.output_index]
 
     rows = read_manifest(args.manifest)
     if not rows:
@@ -133,21 +219,24 @@ def main() -> int:
             try:
                 with Image.open(path) as im:
                     w, h = im.size
-                    nchw = preprocess(im)
-                # 取第 0 个输出：和 Kotlin 侧 res.get(0) 同一口径（u2netp 的 d0 融合图）
-                raw = sess.run([out_names[0]], {in_name: nchw})[0]
-                mask = np.asarray(raw, dtype=np.float32).reshape(SIDE, SIDE)
+                    nchw = preprocess(im, side=args.side, norm=args.norm, mean=mean, std=std,
+                                      layout=args.layout, order=args.channel_order)
+                # 默认取第 0 个输出：和 Kotlin 侧 res.get(0) 同一口径（u2netp 的 d0 融合图）
+                raw = sess.run([out_name], {in_name: nchw})[0]
+                mask = pick_mask(raw, args.mask_channel, mask_resize, sigmoid=args.sigmoid)
             except Exception as exc:
                 print("跳过（推理失败 %s）: %s" % (type(exc).__name__, path))
                 n_fail += 1
                 continue
 
-            grid = mask_to_grid(mask)
+            grid = mask_to_grid(mask, side=mask_resize)
             fb.write(grid.astype(">f4").tobytes())
             peak = float(grid.max())
             peaks.append(peak)
             fm.write("%d\t%s\t%d\t%d\t%.4f\n" % (n_ok, path, w, h, peak))
             n_ok += 1
+            if args.progress and n_ok % args.progress == 0:
+                print("  %d/%d" % (n_ok, len(rows)), flush=True)
 
     if peaks:
         arr = np.asarray(peaks)
