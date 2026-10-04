@@ -1,7 +1,11 @@
 # 第三方素材与依赖
 
-本仓库（`android-camera` / 叶哥相机 DSHCam）自己的代码用 MIT（见 LICENSE）。
+本仓库（`android-camera` / AI相机 DSHCam）自己的代码用 MIT（见 LICENSE）。
 下面这些不是本项目的原创内容，各自的许可如下。
+
+仓库里不带任何图片资源。早期版本里有过 7 张胶片模拟的 3D LUT PNG（`res/raw/lut_*.png`），
+名字沿用富士胶片的公开名称、只适合个人自用，已经全部移出仓库；代码里的 LUT 读表通路保留着，
+要用的话自己产一份 LUT 放进 `res/raw` 即可。
 
 ## 1. 主体模型：`app/src/main/assets/u2netp.onnx`（4.4 MB）
 
@@ -15,16 +19,7 @@
 
 > 若你要再分发/商用，请自行核对上游仓库的许可与署名要求（Apache-2.0 要求保留版权与许可声明）。
 
-## 2. LUT 调色素材：`app/src/main/res/raw/lut_*.png`（7 张，各约 30 KB）
-
-| 项目 | 说明 |
-| --- | --- |
-| 内容 | 8-bit 3D LUT 转成的 PNG 条带（`lut_astia` / `lut_velvia` / `lut_eterna` / `lut_classic_chrome` / `lut_classic_neg` / `lut_pro_neg_std` / `lut_nostalgic_neg`） |
-| 来源 | 由公开的 `.cube` LUT 文件用脚本转成 PNG（转换脚本 `cube_to_lut_png.py` 在本地工具目录，未随仓库上传） |
-| 名称 | 沿用富士胶片（FUJIFILM）胶片模拟的公开名称，**仅用于个人学习/自用**；相关商标归富士胶片所有，本项目与富士胶片无任何关联 |
-| 建议 | 如果要公开分发或商用，建议换成自己生成/授权的 LUT，或把 `res/raw` 里的 LUT 一并删掉（删掉后 App 只剩"原图"一档，其余代码不受影响） |
-
-## 3. 依赖库
+## 2. 依赖库
 
 | 依赖 | 版本 | 许可 |
 | --- | --- | --- |

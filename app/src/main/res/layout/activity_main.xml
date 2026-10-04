@@ -86,7 +86,7 @@
                 android:textColor="@color/cam_text"
                 android:textSize="12sp" />
 
-            <!-- ★ 风格（LUT 实时调色）：点一下循环 原图→经典→鲜艳→…→黑白 -->
+            <!-- ★ 风格：点一下循环 原图→黑白 -->
             <TextView
                 android:id="@+id/chipStyle"
                 android:layout_width="wrap_content"

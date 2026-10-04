@@ -119,7 +119,7 @@ class LutEffect private constructor(
         }
     }
 
-    /** 切换风格（0=原图 … 8=黑白）：只写 @Volatile 序号，下一帧在 GL 线程生效，不重绑 use case。 */
+    /** 切换风格（0=原图 / 1=黑白）：只写 @Volatile 序号，下一帧在 GL 线程生效，不重绑 use case。 */
     fun setStyle(index: Int) {
         processor.setStyle(index)
     }
@@ -134,9 +134,13 @@ class LutEffect private constructor(
 }
 
 /**
- * 9 种滤镜的索引 / 名称 / LUT 资源表。
+ * 滤镜的索引 / 名称 / LUT 资源表。
  *
  * 索引就是 UI 上给用户选的序号，必须和下面 `names` 的下标一一对应。
+ *
+ * 仓库里原来有 7 张胶片模拟的 LUT PNG，归属上只适合自用，已经从仓库移出，
+ * 所以现在只剩「原图」和「黑白」两档；LUT 的读表通路还留在代码里，
+ * 以后自己产了 LUT 只要把资源放进 `res/raw` 并在 [rawResId] 补分支即可。
  */
 object LutStyles {
 
@@ -144,36 +148,20 @@ object LutStyles {
     const val ORIGINAL = 0
 
     /** 黑白：不用 LUT 纹理，shader 里算亮度 + 轻微提对比。 */
-    const val BLACK_WHITE = 8
+    const val BLACK_WHITE = 1
 
     /** UI 显示用的中文名，下标即风格 index。 */
     val names: List<String> = listOf(
         "原图",
-        "经典",
-        "鲜艳",
-        "清新",
-        "影院",
-        "复古",
-        "怀旧",
-        "淡雅",
         "黑白",
     )
 
     /**
      * 返回该风格对应的 `res/raw` LUT 资源；[ORIGINAL] 和 [BLACK_WHITE] 没有 LUT，返回 null。
      *
-     * 下标越界也返回 null（调用方按 passthrough 处理）。
+     * 目前仓库里不带 LUT 图片，所以恒为 null；调用方本来就按"读不到 LUT 就直通"处理。
      */
-    fun rawResId(index: Int): Int? = when (index) {
-        1 -> R.raw.lut_classic_chrome
-        2 -> R.raw.lut_velvia
-        3 -> R.raw.lut_astia
-        4 -> R.raw.lut_eterna
-        5 -> R.raw.lut_classic_neg
-        6 -> R.raw.lut_nostalgic_neg
-        7 -> R.raw.lut_pro_neg_std
-        else -> null
-    }
+    fun rawResId(index: Int): Int? = null
 }
 
 /**

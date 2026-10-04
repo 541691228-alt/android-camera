@@ -363,7 +363,7 @@ class MainActivity : AppCompatActivity() {
         }
         applyRatioUi(CameraController.RATIO_43)
 
-        // ★ 风格（实时 LUT 调色）：原图 → 经典 → 鲜艳 → … → 黑白 → 原图
+        // ★ 风格：原图 → 黑白 → 原图
         chipStyle.setOnClickListener {
             val next = (styleIndex + 1) % LutStyles.names.size
             if (::cameraController.isInitialized) cameraController.setLutStyle(next)
@@ -695,7 +695,7 @@ class MainActivity : AppCompatActivity() {
             refreshChipStyles()
         }
         // 调试钩子4（远程验证实时调色）：
-        //   adb shell am start -n cn.yege.dshcam/.MainActivity --ei style 5  (0=原图 … 8=黑白)
+        //   adb shell am start -n cn.yege.dshcam/.MainActivity --ei style 1  (0=原图 / 1=黑白)
         val dbgStyle = intent?.getIntExtra("style", -1) ?: -1
         if (dbgStyle in 0 until LutStyles.names.size) {
             cameraController.setLutStyle(dbgStyle)

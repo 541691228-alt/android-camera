@@ -15,7 +15,7 @@
 ## 1. 有什么功能
 
 - 预览 / 拍照：CameraX，前后置切换、点按对焦、双指缩放、闪光灯三档（`CameraController.kt`）
-- 风格 LUT 9 档：原图 / 经典 / 鲜艳 / 清新 / 影院 / 复古 / 怀旧 / 淡雅 / 黑白。预览实时生效，成片保存时再补一次调色（`LutEffect.kt`、`res/raw/lut_*.png`）
+- 风格：原图和黑白两档，黑白是 shader 里算亮度再补一点对比，预览实时生效，成片保存时再补一次。仓库不带图片，LUT 读表通路留在代码里，以后要加自己的 LUT，把图放进 `res/raw` 就能接上（`LutEffect.kt`）
 - 网格和画幅：3×3 三分线开关；4:3 / 16:9 / 1:1，1:1 是拍完居中裁（`OverlayView.kt`、`CameraController.kt`）
 - 水平仪和构图分：重力加磁力算倾角，规则引擎给 0–100 的构图分和逐条建议（`SensorPose.kt`、`Rules.kt`）
 - 实时构图提示：「镜头往左移一点（约 13%）」这种带方向和百分比的提示，主体锁定后不再乱跳（`AutoFrame.kt`、`SubjectLock.kt`）
@@ -33,7 +33,7 @@
 app/src/main/java/cn/yege/dshcam/
 ├── MainActivity.kt        界面装配、帧循环、引导决策、诊断钩子
 ├── CameraController.kt    CameraX 绑定、拍照、EXIF 处理、MediaStore 写入、自动构图落盘
-├── LutEffect.kt           CameraEffect + 自写 GL SurfaceProcessor（EGL14/GLES20）做 3D LUT
+├── LutEffect.kt           CameraEffect + 自写 GL SurfaceProcessor（EGL14/GLES20），黑白走 shader，LUT 读表通路留着备用
 ├── OverlayView.kt         网格 / 水平仪 / 峰值 / 引导箭头的绘制
 ├── FaceAnalyzer.kt        ML Kit 人脸 + 亮度&梯度网格 + 主体锚点后台线程（YUV→320×320 ARGB）
 ├── AutoFrame.kt           显著性、构图评分、裁剪搜索、引导文案（纯 Kotlin）
@@ -136,7 +136,7 @@ adb install -r -d .\app\build\outputs\apk\debug\app-debug.apk
 | `--ez autoev true` / `--ei evtest <n>` | 自动曝光自检 / 指定 EV 档 |
 | `--ei autoframe <n>` | 指定自动构图模式 |
 | `--ez grid true\|false`、`--ei ratio <n>` | 网格开关、画幅档 |
-| `--ei style <n>` / `--ei style2 <n>` | 风格档（0 原图 … 7 淡雅 / 8 黑白） |
+| `--ei style <n>` / `--ei style2 <n>` | 风格档（0 原图 / 1 黑白） |
 | `--ei assist <n>` | 合焦辅助：0 关 / 1 峰值 / 2 斑马 / 3 全开 |
 | `--ei guide <n>` / `--ei autoframe <n>` | 构图引导 / 自动构图：0 关 / 1 开 |
 | `--es modeltest <绝对路径>` | 对指定图片跑一次主体模型自检，打印峰值 / 耗时 / 主体位置 |
@@ -176,11 +176,11 @@ RulesTest           8   v1 规则打分
 
 ## 8. 隐私
 
-Manifest 里没有 `INTERNET` 权限，App 不联网、不上传照片、没有统计 SDK。主体模型、LUT、规则全在本地，照片只写进系统相册（MediaStore）。`android:allowBackup="false"`。
+Manifest 里没有 `INTERNET` 权限，App 不联网、不上传照片、没有统计 SDK。主体模型和规则全在本地，照片只写进系统相册（MediaStore）。`android:allowBackup="false"`。
 
 ## 9. 许可
 
-本项目代码是 MIT，见 LICENSE。第三方素材与依赖见 THIRD-PARTY.md（u2netp 是 Apache-2.0；LUT 的名称与素材来源请注意其归属）。
+本项目代码是 MIT，见 LICENSE。第三方素材与依赖见 THIRD-PARTY.md（端上跑的 u2netp 是 Apache-2.0）。
 
 ---
 
@@ -190,7 +190,8 @@ Manifest 里没有 `INTERNET` 权限，App 不联网、不上传照片、没有�
 permission, no cloud calls: everything (including the 4.4 MB u2netp salient-object model running
 on ONNX Runtime) is on-device.
 
-Highlights: 9 LUT looks rendered through a custom GL surface processor; a rule-based composition
+Highlights: a custom GL surface processor (EGL14/GLES20) that renders the black-and-white look and
+still carries the 3D-LUT lookup path; a rule-based composition
 score; auto-framing that crops a better version after the shutter (`..._auto.jpg`); live
 composition guidance that reports a direction and a percentage and stays quiet when there is
 no clear subject (a lock-with-hysteresis layer keeps the model's per-1.5 s subject estimate from
