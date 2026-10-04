@@ -12,6 +12,7 @@ def main():
     parser.add_argument("--zip", default=os.path.join("data", "DUTS-TE.zip"), help="数据集压缩包路径")
     parser.add_argument("--dest", default="data", help="解压目标目录")
     parser.add_argument("--limit", type=int, default=200, help="抽样数量")
+    parser.add_argument("--all", action="store_true", help="不做抽样，全部配对都写进清单（统计功效不够时用）")
     parser.add_argument("--seed", type=int, default=1234, help="随机种子")
     parser.add_argument("--out", default=os.path.join("work", "manifest.tsv"), help="输出清单路径")
     
@@ -64,15 +65,15 @@ def main():
         pairs.append((img_map[stem], mask_map[stem]))
         
     # 数据量太少无法进行统计学有效的评估
-    if len(pairs) < args.limit // 2:
+    if not args.all and len(pairs) < args.limit // 2:
         print(f"错误：有效配对数 ({len(pairs)}) 少于限制的一半 ({args.limit // 2})", file=sys.stderr)
         sys.exit(1)
         
     # 固定种子保证结果可复现
     rng = random.Random(args.seed)
     # 防止采样数量超过可用数据导致程序崩溃
-    actual_limit = min(args.limit, len(pairs))
-    sampled_names = rng.sample(common_stems, actual_limit)
+    actual_limit = len(pairs) if args.all else min(args.limit, len(pairs))
+    sampled_names = common_stems if args.all else rng.sample(common_stems, actual_limit)
     
     # 保证多次运行生成的清单顺序一致
     sampled_names.sort()
