@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 胶囊（未选中）：55% 黑玻璃 + 1dp 描边，圆角 18dp -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <solid android:color="@color/cam_glass" />
+    <stroke android:width="1dp" android:color="@color/cam_stroke" />
+    <corners android:radius="18dp" />
+</shape>

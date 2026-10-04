@@ -1,0 +1,277 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ★ 2026-10-04 界面重做（"专业相机风"）：大数值优先 + 玻璃底 + 圆角 + 四色状态
+  设计约束（改这里要一起改的地方）：
+    · 底部控件高度变了 → 同步 OverlayView 里的 bottomReserve（屏幕高 20%）
+    · 顶部胶囊行高度变了 → 同步 OverlayView 里的 hintBaseline（屏幕高 10.5%）
+    · 胶囊的选中/开启样式由 MainActivity 用 setBackgroundResource(bg_chip_on / bg_chip) 切换
+-->
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <!-- ① 相机预览：点屏对焦 / 双指缩放的手势都加在它身上
+         ★ scaleType=fitCenter：整个 4:3 画面都看得见（上下留黑边），取景框 = 成片。
+           默认的 fillCenter 会把画面裁掉两侧去铺满竖屏，屏幕上的三分线跟照片里的
+           三分线不在同一位置（构图助手最要命的错） -->
+    <androidx.camera.view.PreviewView
+        android:id="@+id/previewView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        app:scaleType="fitCenter" />
+
+    <!-- ② 构图覆盖层：三分线 / 水平仪 / 人脸框 / 评分环 / 建议卡片 / 对焦框 / 峰值 / 斑马纹 / 构图引导
+         注意：它不消费触摸事件，所以点在它上面的手势会落到下面的 PreviewView -->
+    <cn.yege.dshcam.OverlayView
+        android:id="@+id/overlayView"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent" />
+
+    <!-- ③ 变焦倍率（左上角，大数值，专业相机风） -->
+    <TextView
+        android:id="@+id/tvZoom"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_marginStart="14dp"
+        android:layout_marginTop="14dp"
+        android:background="@drawable/bg_chip"
+        android:fontFamily="sans-serif-medium"
+        android:paddingHorizontal="14dp"
+        android:paddingVertical="6dp"
+        android:text="@string/zoom_default"
+        android:textColor="@color/cam_text"
+        android:textSize="20sp" />
+
+    <!-- ③b 取景辅助开关：7 颗胶囊，横向可滑动
+         （网格 / 画幅 / 风格 / 自动EV / 引导 / 自动构图 / 合焦提示） -->
+    <HorizontalScrollView
+        android:id="@+id/chipScroll"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="top|start"
+        android:layout_marginTop="62dp"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:scrollbars="none">
+
+        <LinearLayout
+            android:id="@+id/chipRow"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/chipGrid"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:background="@drawable/bg_chip_on"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="6dp"
+                android:text="@string/chip_grid_on"
+                android:textColor="@color/cam_text"
+                android:textSize="12sp" />
+
+            <TextView
+                android:id="@+id/chipRatio"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/bg_chip"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="6dp"
+                android:text="@string/chip_ratio_43"
+                android:textColor="@color/cam_text"
+                android:textSize="12sp" />
+
+            <!-- ★ 风格（LUT 实时调色）：点一下循环 原图→经典→鲜艳→…→黑白 -->
+            <TextView
+                android:id="@+id/chipStyle"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/bg_chip"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="6dp"
+                android:text="@string/style_original"
+                android:textColor="@color/cam_text"
+                android:textSize="12sp" />
+
+            <!-- ★ 自动曝光补偿：画面持续偏暗/过曝时自动走 1/3 EV 挡（5 帧防抖） -->
+            <TextView
+                android:id="@+id/chipAutoEv"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/bg_chip"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="6dp"
+                android:text="@string/chip_auto_ev_off"
+                android:textColor="@color/cam_text"
+                android:textSize="12sp" />
+
+            <!-- ★ 构图引导（A）：实时告诉你往哪挪手机 / 端平 -->
+            <TextView
+                android:id="@+id/chipGuide"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/bg_chip_on"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="6dp"
+                android:text="@string/chip_guide_on"
+                android:textColor="@color/cam_text"
+                android:textSize="12sp" />
+
+            <!-- ★ 自动构图（B）：拍完另存一张把主体摆到三分点、水平线拉直的版本 -->
+            <TextView
+                android:id="@+id/chipAutoFrame"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/bg_chip_on"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="6dp"
+                android:text="@string/chip_autoframe_on"
+                android:textColor="@color/cam_text"
+                android:textSize="12sp" />
+
+            <!-- ★ 合焦提示：关 / 峰值 / 斑马 / 全开 -->
+            <TextView
+                android:id="@+id/chipAssist"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/bg_chip"
+                android:paddingHorizontal="12dp"
+                android:paddingVertical="6dp"
+                android:text="@string/chip_assist_off"
+                android:textColor="@color/cam_text"
+                android:textSize="12sp" />
+        </LinearLayout>
+    </HorizontalScrollView>
+
+    <!-- ④ 底部控制区：曝光面板 + 切换/快门/闪光 + 手势提示 -->
+    <LinearLayout
+        android:id="@+id/bottomBar"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:layout_gravity="bottom"
+        android:orientation="vertical"
+        android:paddingStart="14dp"
+        android:paddingEnd="14dp"
+        android:paddingTop="8dp"
+        android:paddingBottom="12dp">
+
+        <!-- 曝光补偿面板：数值用大号字（专业相机风），滑杆青色 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_panel"
+            android:gravity="center_vertical"
+            android:orientation="horizontal"
+            android:paddingStart="14dp"
+            android:paddingEnd="14dp"
+            android:paddingTop="4dp"
+            android:paddingBottom="4dp">
+
+            <TextView
+                android:id="@+id/tvEv"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:fontFamily="sans-serif-medium"
+                android:minWidth="118dp"
+                android:text="@string/ev_zero"
+                android:textColor="@color/cam_text"
+                android:textSize="20sp" />
+
+            <SeekBar
+                android:id="@+id/seekEv"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:progressTint="@color/cam_accent"
+                android:thumbTint="@color/cam_accent" />
+        </LinearLayout>
+
+        <!-- 相机主控：切换镜头 | 快门（大圆） | 闪光灯 -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="10dp"
+            android:gravity="center_vertical"
+            android:orientation="horizontal">
+
+            <Button
+                android:id="@+id/btnSwitch"
+                android:layout_width="0dp"
+                android:layout_height="52dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_btn"
+                android:backgroundTint="@null"
+                android:drawableStart="@drawable/ic_switch_camera"
+                android:drawablePadding="6dp"
+                android:drawableTint="@color/cam_text"
+                android:fontFamily="sans-serif-medium"
+                android:gravity="center"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:stateListAnimator="@null"
+                android:text="@string/btn_switch_short"
+                android:textAllCaps="false"
+                android:textColor="@color/cam_text"
+                android:textSize="13sp" />
+
+            <Button
+                android:id="@+id/btnCapture"
+                android:layout_width="72dp"
+                android:layout_height="72dp"
+                android:layout_marginStart="14dp"
+                android:layout_marginEnd="14dp"
+                android:background="@drawable/bg_shutter"
+                android:backgroundTint="@null"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:stateListAnimator="@null"
+                android:text="" />
+
+            <Button
+                android:id="@+id/btnFlash"
+                android:layout_width="0dp"
+                android:layout_height="52dp"
+                android:layout_weight="1"
+                android:background="@drawable/bg_btn"
+                android:backgroundTint="@null"
+                android:drawableStart="@drawable/ic_flash"
+                android:drawablePadding="6dp"
+                android:drawableTint="@color/cam_text"
+                android:fontFamily="sans-serif-medium"
+                android:gravity="center"
+                android:insetTop="0dp"
+                android:insetBottom="0dp"
+                android:minWidth="0dp"
+                android:minHeight="0dp"
+                android:stateListAnimator="@null"
+                android:text="@string/btn_flash_off"
+                android:textAllCaps="false"
+                android:textColor="@color/cam_text"
+                android:textSize="13sp" />
+        </LinearLayout>
+
+        <TextView
+            android:id="@+id/tvGesture"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:gravity="center"
+            android:text="@string/gesture_hint"
+            android:textColor="@color/cam_text_faint"
+            android:textSize="11sp" />
+    </LinearLayout>
+</FrameLayout>

@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ★ 2026-10-04 统一配色（"专业相机风"）：只用这四个状态色 + 三档玻璃底 -->
+<resources>
+    <!-- 状态色：青=主色（峰值/水平仪达标/变焦），绿=构图 OK，橙=注意，红=过曝/偏暗 -->
+    <color name="cam_accent">#00E5FF</color>
+    <color name="cam_good">#4CAF50</color>
+    <color name="cam_warn">#FFC107</color>
+    <color name="cam_bad">#FF5252</color>
+
+    <!-- 玻璃底：按钮/胶囊用 55% 黑，面板用 30% 黑，描边 20% 白 -->
+    <color name="cam_glass">#8C000000</color>
+    <color name="cam_glass_soft">#4D000000</color>
+    <color name="cam_glass_on">#3300E5FF</color>
+    <color name="cam_stroke">#33FFFFFF</color>
+
+    <color name="cam_text">#FFFFFFFF</color>
+    <color name="cam_text_dim">#B3FFFFFF</color>
+    <color name="cam_text_faint">#80FFFFFF</color>
+</resources>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 闪光灯：闪电（颜色由代码按 关/自动/开 三态 tint） -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="24"
+    android:viewportHeight="24">
+    <path
+        android:fillColor="@color/cam_text"
+        android:pathData="M13.4,2.2L5.6,13.1h4.9L10,21.8l7.8,-11.2h-4.9z" />
+</vector>
