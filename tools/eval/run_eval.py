@@ -201,6 +201,9 @@ def main():
     pred_cut, center_cut = 0, 0
     DEAD_CENTER_TOL = 0.05  # 主体质心离框中心 5% 以内就算"摆正中"
     CUT_TOL = 0.99          # 框内不到 99% 的主体像素就算切到了主体
+    # 主体损失分档：lost = 1 - 保留率，也就是被裁掉的主体像素比例。
+    # 只看"有没有切到"（CUT_TOL）分不出"掉 1%"和"掉一半"，这里给一条严重度曲线。
+    LOSS_LEVELS = (0.001, 0.01, 0.05, 0.10, 0.20, 0.50)
     
     # By Size Bins
     bins = {
@@ -363,6 +366,29 @@ def main():
             "cut_rate": round(cut / max(n, 1), 6),
         }
 
+    def loss_profile(ks):
+        """主体损失（被裁掉的主体像素比例）分布。
+
+        输入的 ks 是逐图保留率，None 会被丢掉（无掩膜的图算不出保留率）。
+        只统计能算出保留率的图，所以 n 可能小于总张数 —— 这是有意的：
+        把"没有主体"的图按损失 0 计进去会把曲线稀释得好看。
+        """
+        valid = [float(k) for k in ks if k is not None]
+        if not valid:
+            return {"n": 0}
+        arr = np.array(valid)
+        lost = 1.0 - arr
+        prof = {
+            "n": len(valid),
+            "mean_lost": round(float(lost.mean()), 6),
+            "p90_lost": round(float(np.percentile(lost, 90)), 6),
+            "max_lost": round(float(lost.max()), 6),
+            "fully_kept_rate": round(float((lost <= 1e-9).mean()), 6),
+        }
+        for lv in LOSS_LEVELS:
+            prof["lost_gt_" + ("%g" % (lv * 100)) + "pct_rate"] = round(float((lost > lv).mean()), 6)
+        return prof
+
     report = {
         "n_images": n_images,
         "n_errors": n_errors,
@@ -392,6 +418,10 @@ def main():
             "center": composition_stats(center_thirds, center_center_d, center_dead, center_cut, n_images),
             "dead_center_tol": DEAD_CENTER_TOL,
             "cut_tol": CUT_TOL,
+            "loss_levels": list(LOSS_LEVELS),
+            "pred_loss": loss_profile(pred_ks),
+            "center_loss": loss_profile(center_ks),
+            "optimal_loss": loss_profile(optimal_ks),
         },
         "by_size": {},
         "notes": (
@@ -424,6 +454,20 @@ def main():
     # 写入 Markdown
     c_pred = report["composition"]["pred"]
     c_center = report["composition"]["center"]
+    p_loss = report["composition"]["pred_loss"]
+    c_loss = report["composition"]["center_loss"]
+
+    def loss_row(name, prof):
+        if not prof.get("n"):
+            return f"| {name} | — | — | — | — | — | — | — |"
+        cells = " | ".join(
+            f"{prof['lost_gt_%gpct_rate' % (lv * 100)] * 100:.1f}%" for lv in LOSS_LEVELS[1:6]
+        )
+        return (
+            f"| {name} | {prof['mean_lost'] * 100:.2f}% | {prof['p90_lost'] * 100:.2f}% | "
+            + cells + " |"
+        )
+
     title = "# 构图算法评测报告"
     if args.label:
         title += f"（口径：{args.label}）"
@@ -455,6 +499,19 @@ def main():
         "画面正中心对四个交点都是 ~0.2357 最远）；摆正中＝主体质心离裁剪框中心 5% 以内；"
         "切到主体＝框内留下不到 99% 的主体像素。这一组指标才反映「构图」本身，"
         "保留率只反映「有没有把主体裁掉」。",
+        "",
+        "## 主体损失分布（被裁掉的主体像素比例）",
+        "",
+        f"只统计能算出保留率的 {p_loss.get('n', 0)} 张图。损失＝1 − 保留率；"
+        ">X% 表示有多大比例的图裁掉了超过 X% 的主体像素。",
+        "",
+        "| 模式 | 平均损失 | p90 损失 | >1% | >5% | >10% | >20% | >50% |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
+        loss_row("算法预测", p_loss),
+        loss_row("居中裁剪", c_loss),
+        "",
+        "说明：「切到主体比例」只区分 0 与 >0，这一张表才看得出切得有多狠 —— "
+        "如果 >1% 有 30% 但 >20% 只有 2%，那说明多出来的那部分是标注噪声级别的小切口，不是真把主体切掉了。",
         "",
         "## 结论",
         "",

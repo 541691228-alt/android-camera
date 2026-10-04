@@ -24,6 +24,9 @@ class EvalHarnessTest {
 
     private data class EvalRow(val line: String, val status: String, val skipped: Boolean)
 
+    /** 累计 bestCrop 的纯计算耗时（纳秒），用来比较候选数量变化带来的实际开销。 */
+    private var cropNanos = 0L
+
     /**
      * 评测用的目标宽高比。
      *
@@ -52,6 +55,43 @@ class EvalHarnessTest {
      */
     private val evalGridPath: String? =
         System.getenv("EVAL_GRID")?.trim()?.takeIf { it.isNotEmpty() }
+
+    /**
+     * 采纳门槛策略：abs（旧，绝对 0.05）/ range（候选分数动态范围）/ headroom（剩余可提升空间）。
+     *
+     * 和 EVAL_ASPECT 一样，写错不能悄悄退回默认值 —— 否则会拿一份口径不对的报告去下结论。
+     */
+    private val evalGate: AutoFrame.GateMode = run {
+        val raw = System.getenv("EVAL_GATE")?.trim()
+        when {
+            raw.isNullOrEmpty() || raw.equals("abs", ignoreCase = true) -> AutoFrame.GateMode.ABS
+            raw.equals("range", ignoreCase = true) -> AutoFrame.GateMode.RANGE
+            raw.equals("headroom", ignoreCase = true) -> AutoFrame.GateMode.HEADROOM
+            else -> throw IllegalArgumentException("EVAL_GATE 只能是 abs/range/headroom，实际是: $raw")
+        }
+    }
+
+    /** 门槛系数，含义随 EVAL_GATE 变（abs=绝对分差、range/headroom=相对系数）；不设则用生产默认值。 */
+    private val evalGateRel: Float = run {
+        val raw = System.getenv("EVAL_GATE_REL")?.trim()
+        when {
+            raw.isNullOrEmpty() -> AutoFrame.ABS_GATE_MARGIN
+            else -> raw.toFloatOrNull()?.takeIf { it.isFinite() && it > 0f }
+                ?: throw IllegalArgumentException("EVAL_GATE_REL 只能是正数，实际是: $raw")
+        }
+    }
+
+    /**
+     * 候选位置锚点数：> 0 用固定锚点网格（GAIC 的 grid anchor 口径），不设 = 旧的按框长比例滑窗。
+     */
+    private val evalAnchor: Int = run {
+        val raw = System.getenv("EVAL_ANCHOR")?.trim()
+        when {
+            raw.isNullOrEmpty() -> 0
+            else -> raw.toIntOrNull()?.takeIf { it > 0 }
+                ?: throw IllegalArgumentException("EVAL_ANCHOR 只能是正整数，实际是: $raw")
+        }
+    }
 
     @Test
     fun runEval() {
@@ -124,7 +164,11 @@ class EvalHarnessTest {
 
         println(
             "[eval-harness] total=$total ok=$ok skipped=$skippedCount errors=$errors " +
-                "salience=${if (useGrid) "model-grid" else "rule-argb"} out=${outFile.path}"
+                "salience=${if (useGrid) "model-grid" else "rule-argb"} " +
+                "aspect=${evalAspect ?: "src"} gate=$evalGate/$evalGateRel " +
+                "anchor=${if (evalAnchor > 0) evalAnchor.toString() else "legacy"} " +
+                "avg_crop_us=${if (ok > 0) cropNanos / ok / 1000 else 0} " +
+                "out=${outFile.path}"
         )
     }
 
@@ -180,7 +224,9 @@ class EvalHarnessTest {
         // 目标宽高比：默认取原图比例（变焦口径），可用 EVAL_ASPECT 指定方/竖构图
         val aspect = evalAspect ?: (w.toFloat() / h.toFloat())
         // minKeep 取生产的 0.60f：默认值 0.70f 不是线上口径，用了评测会系统性偏保守
-        val crop = AutoFrame.bestCrop(s, w, h, aspect, 0.60f)
+        val t0 = System.nanoTime()
+        val crop = AutoFrame.bestCrop(s, w, h, aspect, 0.60f, evalGate, evalGateRel, evalAnchor)
+        cropNanos += System.nanoTime() - t0
 
         val keepArea = crop.width.toDouble() * crop.height / (w.toDouble() * h)
         // 端上 keep 面积够大就不另存 _auto 文件，这里复现同一个判定，方便对齐真实产出

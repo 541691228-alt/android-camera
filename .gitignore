@@ -35,3 +35,7 @@ desktop.ini
 *.log
 *.hprof
 *.tmp
+
+# ---- Python 缓存 ----
+__pycache__/
+*.pyc

@@ -476,7 +476,52 @@ object AutoFrame {
      * edgeCut 的用意：框外那些高权重格子（>= 0.6*maxWeight）大概率是主体的一部分，
      * 把它们裁到画面外是构图大忌，所以这两倍权重的重罚会强力排斥「切到主体」的候选框。
      */
-    fun bestCrop(s: Salience, srcW: Int, srcH: Int, aspect: Float, minKeep: Float = 0.70f): CropRect {
+    /**
+     * 「这次裁剪值不值得」的门槛策略。
+     *
+     * 为什么需要相对门槛：分数 = 0.55×三分得分 + 0.25×主体保留 + 0.20×面积 − 裁剪惩罚，
+     * 而「基准框」（最大可用框）本身的三分得分随主体在原图里的位置变化 —— 主体本来就在三分点附近时，
+     * 任何裁剪能拿到的提升都很小。于是同一个绝对分差 0.05，在不同照片上并不是同一个标准。
+     * 离线评测实测：旧口径下有 66.5% 的图根本过不了这道闸（等于自动裁剪没运行）。
+     */
+    enum class GateMode {
+        /** 旧行为：门槛 = 绝对分差 0.05（默认值，保持线上行为不变）。 */
+        ABS,
+
+        /** 门槛 = gateRel × 候选分数动态范围（max − min），随"这组候选里有没有明显更好的框"缩放。 */
+        RANGE,
+
+        /** 门槛 = gateRel × 剩余可提升空间（1 − 基准分），随"这张图还能提升多少"缩放。 */
+        HEADROOM
+    }
+
+    /** ABS 门槛的默认绝对分差（历史行为）。 */
+    const val ABS_GATE_MARGIN = 0.05f
+
+    /** 相对门槛的绝对下限：防止候选分数几乎全相等时门槛退化成 0（那会变成"永远采纳"）。 */
+    const val MIN_GATE_MARGIN = 0.01f
+
+    /**
+     * 找一个"主体尽量落在三分点、同时别把主体裁掉"的裁剪框。
+     *
+     * @param gate        采纳门槛策略，默认 [GateMode.ABS] 与历史行为一致。
+     * @param gateRel     门槛系数，含义随 [gate] 变：
+     *                    ABS → 绝对分差本身（默认 0.05）；
+     *                    RANGE → 乘以候选分数动态范围（max − min）；
+     *                    HEADROOM → 乘以剩余可提升空间（1 − 基准分）。
+     * @param anchorCount 候选位置锚点数：> 0 时用固定锚点网格（GAIC 的 grid anchor 口径，步长只跟
+     *                    图像网格有关，不随候选框大小变），= 0 时沿用旧的"步长 = 框长/16"比例滑窗。
+     */
+    fun bestCrop(
+        s: Salience,
+        srcW: Int,
+        srcH: Int,
+        aspect: Float,
+        minKeep: Float = 0.70f,
+        gate: GateMode = GateMode.ABS,
+        gateRel: Float = ABS_GATE_MARGIN,
+        anchorCount: Int = 0
+    ): CropRect {
         // 1) 最大可用框
         val safeAspect = if (aspect.isFinite() && aspect > 0f) aspect else 1f
         val maxW: Int
@@ -533,6 +578,9 @@ object AutoFrame {
         }
 
         var bestScore = Float.NEGATIVE_INFINITY
+        // 全部候选分数的动态范围：相对门槛（RANGE）用它把"多少分算显著提升"归一化
+        var minCandScore = Float.POSITIVE_INFINITY
+        var maxCandScore = Float.NEGATIVE_INFINITY
         var bestX = 0
         var bestY = 0
         var bestWk = 1
@@ -552,8 +600,11 @@ object AutoFrame {
             val wk = max(1, (maxWg * sScale).roundToInt()).coerceAtMost(s.cols)
             val hk = max(1, (maxHg * sScale).roundToInt()).coerceAtMost(s.rows)
 
-            val stepX = max(1, wk / 16)
-            val stepY = max(1, hk / 16)
+            // 候选位置步长。anchorCount > 0 时用固定锚点网格（GAIC 的 grid anchor 口径）：
+            // 步长只跟图像网格有关、不随候选框大小变，小框不再产生一堆近邻冗余候选。
+            // 旧的"步长 = 框长/16"会让小框的候选密到大框的十几倍，是候选数爆炸的来源。
+            val stepX = if (anchorCount > 0) max(1, s.cols / anchorCount) else max(1, wk / 16)
+            val stepY = if (anchorCount > 0) max(1, s.rows / anchorCount) else max(1, hk / 16)
             val maxX = max(0, s.cols - wk)
             val maxY = max(0, s.rows - hk)
 
@@ -562,6 +613,8 @@ object AutoFrame {
                 var xk = 0
                 while (xk <= maxX) {
                     val score = scoreCrop(s, xk, yk, wk, hk, totalWeight, maxWeight, highThreshold, highTotal, maxWg, maxHg)
+                    if (score < minCandScore) minCandScore = score
+                    if (score > maxCandScore) maxCandScore = score
                     if (k == 0 && score > baseScore) {
                         baseScore = score
                         baseX = xk
@@ -586,11 +639,23 @@ object AutoFrame {
 
         if (bestScore == Float.NEGATIVE_INFINITY) return fallback
 
-        // ★ 2026-10-05 加"动剪刀门槛"：裁剪必须比最大框（4:3 时＝整图）高出 0.05 分才采纳，
-        //   否则原样返回最大框 —— 避免为了零点几分的抖动把照片裁小。返回最大框时，
-        //   下游 CameraController 会判"构图已达标、不另存"，等于什么都不做（安全）。
+        // ★ 2026-10-05 第二版"动剪刀门槛"：原先是绝对分差 0.05 —— 但分数的动态范围随主体位置变化
+        //   （主体本来就在三分点附近时，任何裁剪能拿到的提升都很小），固定 0.05 在不同照片上不等价，
+        //   实测 66.5% 的图过不了这道闸、等于自动裁剪没运行。这里给出三种策略，默认仍是 ABS：
+        //   线上行为先保持不变，由离线评测用真实数据挑赢家，再改默认值。
         val base = if (baseScore == Float.NEGATIVE_INFINITY) 0f else baseScore
-        val adopted = bestScore >= base + 0.05f
+        val margin = when (gate) {
+            GateMode.ABS -> gateRel.coerceAtLeast(0f)
+            GateMode.RANGE -> max(
+                MIN_GATE_MARGIN,
+                gateRel.coerceIn(0f, 1f) * (maxCandScore - minCandScore).coerceAtLeast(0f)
+            )
+            GateMode.HEADROOM -> max(
+                MIN_GATE_MARGIN,
+                gateRel.coerceIn(0f, 1f) * (1f - base).coerceAtLeast(0f)
+            )
+        }
+        val adopted = bestScore >= base + margin
         if (!adopted) {
             bestX = baseX
             bestY = baseY
@@ -600,7 +665,8 @@ object AutoFrame {
         }
         lastScoreInfo = (if (adopted) "采纳裁剪" else "保持最大框") +
             " 最佳=" + ((bestScore * 1000f).roundToInt() / 1000f) +
-            " 基准=" + ((base * 1000f).roundToInt() / 1000f)
+            " 基准=" + ((base * 1000f).roundToInt() / 1000f) +
+            " 门槛=" + ((margin * 1000f).roundToInt() / 1000f)
 
         // 5) 换算成源图像素并强制夹进画面
         val left = (bestX.toDouble() * srcW / s.cols).roundToInt()
