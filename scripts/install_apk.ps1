@@ -8,14 +8,14 @@
   没检测到设备时打印中文排查清单并 exit 1。
 
 .EXAMPLE
-  pwsh -File .\scripts\install_apk.ps1 -Apk "D:\spider\tools\android-camera\dist\dshcam-v1.apk" -AndroidSdk "C:\Android\Sdk"
+  pwsh -File .\scripts\install_apk.ps1 -Apk ".\dist\dshcam-v1.apk" -AndroidSdk "C:\Android\Sdk"
 
 .NOTES
   本文件保存为 UTF-8（带 BOM），Windows PowerShell 5.1 与 PowerShell 7 都能正确显示中文。
 #>
 [CmdletBinding()]
 param(
-    [string]$Apk        = "D:\spider\tools\android-camera\dist\dshcam-v1.apk",
+    [string]$Apk        = "",
     [string]$Adb        = "",
     [string]$AndroidSdk = $env:ANDROID_HOME
 )
@@ -27,6 +27,9 @@ function Fail([string]$msg) {
     Write-Host "[失败] $msg" -ForegroundColor Red
     exit 1
 }
+
+# ---------- 0. 默认 APK 位置 = 工程根的 dist\ ----------
+if ([string]::IsNullOrWhiteSpace($Apk)) { $Apk = Join-Path (Split-Path -Parent $PSScriptRoot) "dist\dshcam-v1.apk" }
 
 # ---------- 1. 检查 APK ----------
 if (-not (Test-Path -LiteralPath $Apk)) {

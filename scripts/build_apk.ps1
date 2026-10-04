@@ -19,7 +19,7 @@
 param(
     [string]$AndroidSdk = $env:ANDROID_HOME,
     [string]$JdkHome    = $env:JAVA_HOME,
-    [string]$OutApk     = "D:\spider\tools\android-camera\dist\dshcam-v1.apk",
+    [string]$OutApk     = "",
     [string]$ProjectDir = ""
 )
 
@@ -39,6 +39,9 @@ if (-not (Test-Path -LiteralPath (Join-Path $ProjectDir "settings.gradle.kts")) 
     -not (Test-Path -LiteralPath (Join-Path $ProjectDir "settings.gradle"))) {
     Write-Host "[警告] $ProjectDir 下没看到 settings.gradle(.kts)，确认这是 Android 工程根目录。" -ForegroundColor Yellow
 }
+
+# ---------- 0.1 默认输出位置 = 工程根的 dist\ ----------
+if ([string]::IsNullOrWhiteSpace($OutApk)) { $OutApk = Join-Path $ProjectDir "dist\dshcam-v1.apk" }
 
 # ---------- 1. 定位 Android SDK / JDK ----------
 if ([string]::IsNullOrWhiteSpace($AndroidSdk)) {

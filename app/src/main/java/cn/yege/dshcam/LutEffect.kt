@@ -1071,7 +1071,7 @@ private class GlLutRenderer(
         //   Matrix.multiplyMM(updated, 0, input, 0, additionalTransform, 0)
         // 调用方传进来的 input 就是 surfaceTexture.getTransformMatrix() 拿到的相机矩阵，
         // 所以 updated 已经 = 相机变换 × 额外变换，相机变换只在里面应用了一次
-        // （见 D:\spider\.cache\cam-src\core\androidx\camera\core\processing\SurfaceOutputImpl.java:283-284）。
+        // （见 androidx.camera.core.processing.SurfaceOutputImpl.updateTransformMatrix，约 283-284 行）。
         // androidx.camera.effects.internal.SurfaceProcessorImpl 也正是把这份矩阵单独喂给渲染器：
         //   surfaceOutput.updateTransformMatrix(mSurfaceTransform, mTextureTransform);
         //   mGlRenderer.renderInputToSurface(timestamp, mSurfaceTransform, surface);
