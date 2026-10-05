@@ -772,10 +772,12 @@ object AutoFrame {
         //      等于系统性地奖励"什么都不做"；现在分母只算重要格子（retention）。
         //   坑3 三分法用框内全部格子的质心 → 背景把质心拽回框中心，"主体是否落在三分点"
         //      根本看不出来；现在用重要格子的质心（主体重心）。
-        //   权重：三分 0.55 / 主体保留 0.25 / 面积 0.20。三分是主角（否则白算），
-        //   面积仍有分但不再压过构图，主体被裁才重罚。
+        //   ★ 2026-10-06 权重按 eval 反推落地（RESULTS-optimization-round.md §2 / 9 口径全翻正）：
+        //      三分 0.40 / 主体保留 0.60 / 面积 0.00。保留率才是主角，面积项归零（面积小
+        //      的框不再白拿分），三分压后位；主体被裁仍重罚（onset 0.75 / slope 1.6 不变）。
+        //      与仓库 tools/eval/sweep_weights.py 的 W_NEW=(0.40,0.60,0.00,0.75,1.6) 一致。
         val cutPenalty = if (retention < 0.75f) (0.75f - retention) * 1.6f else 0f
 
-        return (0.55f * thirds + 0.25f * retention + 0.20f * areaRatio - cutPenalty)
+        return (0.40f * thirds + 0.60f * retention - cutPenalty)
     }
 }
