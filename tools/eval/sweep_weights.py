@@ -70,12 +70,14 @@ def load_pairs(grids_manifest, mask_manifest):
     return pairs
 
 
-def read_grid(bf, idx):
-    bf.seek(idx * REC_BYTES)
-    buf = bf.read(REC_BYTES)
-    if len(buf) != REC_BYTES:
-        raise EOFError(f"grids.bin 读不到第 {idx} 条记录")
-    return np.frombuffer(buf, dtype=">f4").reshape(GRID_H, GRID_W).astype(np.float32)
+def read_grid(bf, idx, cols=GRID_W, rows=GRID_H):
+    """读第 idx 条网格记录。默认 64×48（REC_BYTES），--grid-w/--grid-h 可换分辨率。"""
+    nbytes = cols * rows * 4
+    bf.seek(idx * nbytes)
+    buf = bf.read(nbytes)
+    if len(buf) != nbytes:
+        raise EOFError(f"grids.bin 读不到第 {idx} 条记录（{cols}x{rows}）")
+    return np.frombuffer(buf, dtype=">f4").reshape(rows, cols).astype(np.float32)
 
 
 def mask_integral(mask):
@@ -111,7 +113,8 @@ def rti_vec(v):
 # ----------------------------------------------------------------- 扫参
 
 def evaluate(pairs, bin_path, W, aspect=None, keep=None, anchor=0, gate="abs",
-             gate_rel=sb.ABS_GATE_MARGIN, limit=0, sample=0, seed=7, verbose=False):
+             gate_rel=sb.ABS_GATE_MARGIN, limit=0, sample=0, seed=7, verbose=False,
+             cols=GRID_W, rows=GRID_H):
     """在 pairs 上评估权重矩阵 W（nW × 5：thirds, retention, area, cut_onset, cut_slope）。"""
     keep = sb.EVAL_MIN_KEEP if keep is None else keep
     if len(pairs) == 0:
@@ -148,8 +151,8 @@ def evaluate(pairs, bin_path, W, aspect=None, keep=None, anchor=0, gate="abs",
             cx_n = (float(xs.mean()) + 0.5) / float(w)
             cy_n = (float(ys.mean()) + 0.5) / float(h)
 
-            grid = read_grid(bf, idx)
-            feat = sb.image_features(grid, w, h, aspect, keep, anchor)
+            grid = read_grid(bf, idx, cols, rows)
+            feat = sb.image_features(grid, w, h, aspect, keep, anchor, cols, rows)
 
             if feat is None:  # Kotlin 兜底分支：所有权重组都拿到同一个居中框
                 l, t, cw, ch, _ = sb.fallback_box(w, h, aspect)
@@ -179,10 +182,10 @@ def evaluate(pairs, bin_path, W, aspect=None, keep=None, anchor=0, gate="abs",
                 adopted = best_s >= (base_s + margin).astype(F32)
                 sel = np.where(adopted, best_i, base_i)
 
-                left = rti_vec(feat["xks"][sel].astype(np.float64) * w / GRID_W)
-                top = rti_vec(feat["yks"][sel].astype(np.float64) * h / GRID_H)
-                out_w = np.maximum(1, rti_vec(feat["wks"][sel].astype(np.float64) * w / GRID_W))
-                out_h = np.maximum(1, rti_vec(feat["hks"][sel].astype(np.float64) * h / GRID_H))
+                left = rti_vec(feat["xks"][sel].astype(np.float64) * w / cols)
+                top = rti_vec(feat["yks"][sel].astype(np.float64) * h / rows)
+                out_w = np.maximum(1, rti_vec(feat["wks"][sel].astype(np.float64) * w / cols))
+                out_h = np.maximum(1, rti_vec(feat["hks"][sel].astype(np.float64) * h / rows))
 
             left_c, top_c, width_c, height_c = clip_box(left, top, out_w, out_h, w, h)
             x0, y0 = left_c, top_c
@@ -335,6 +338,8 @@ def main(argv=None):
     ap.add_argument("--gate-rel", type=float, default=float(sb.ABS_GATE_MARGIN))
     ap.add_argument("--anchor", type=int, default=0)
     ap.add_argument("--keep", type=float, default=None)
+    ap.add_argument("--grid-w", type=int, default=GRID_W, help="网格宽，默认 64（换分辨率时配合 --grids-bin）")
+    ap.add_argument("--grid-h", type=int, default=GRID_H, help="网格高，默认 48")
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--sample", type=int, default=0)
     ap.add_argument("--seed", type=int, default=7)
@@ -346,12 +351,15 @@ def main(argv=None):
     aspect = None if args.aspect == "src" else float(args.aspect)
     pairs = load_pairs(args.grids_manifest, args.manifest)
     W = parse_wlist(args.weights) if args.scan == "list" else grid_weights(args.scan)
-    print(f"图文对 {len(pairs)} 条｜权重 {len(W)} 组｜aspect={args.aspect}｜样本={args.sample or len(pairs)}")
+    print(f"图文对 {len(pairs)} 条｜权重 {len(W)} 组｜aspect={args.aspect}｜样本={args.sample or len(pairs)}"
+          f"｜网格={args.grid_w}x{args.grid_h}")
 
     res = evaluate(pairs, args.grids_bin, W, aspect=aspect, keep=args.keep, anchor=args.anchor,
                    gate_rel=args.gate_rel, limit=args.limit, sample=args.sample, seed=args.seed,
-                   verbose=args.verbose)
+                   verbose=args.verbose, cols=args.grid_w, rows=args.grid_h)
     res["aspect"] = args.aspect
+    res["grid_w"] = args.grid_w
+    res["grid_h"] = args.grid_h
     res["grids_manifest"] = str(args.grids_manifest)
     res["seconds_total"] = res["seconds"]
     show(res, top=args.top)

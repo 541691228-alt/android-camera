@@ -58,13 +58,14 @@ def rti_scalar(x: float) -> int:
     return int(math.floor(x + 0.5))
 
 
-def load_grids(path: Path, count: int) -> np.memmap:
-    """每张图 64x48 个大端 float32，行主序（i = row*64 + col）。"""
+def load_grids(path: Path, count: int, cols: int = GRID_W, rows: int = GRID_H) -> np.memmap:
+    """每张图 cols×rows 个大端 float32，行主序（i = row*cols + col）。默认 64×48。"""
+    nbytes = int(cols) * int(rows) * 4
     size = path.stat().st_size
-    avail = size // GRID_BYTES
+    avail = size // nbytes
     if avail < count:
         raise SystemExit(f"{path} 只有 {avail} 条记录，清单要 {count} 条")
-    return np.memmap(path, dtype=">f4", mode="r", shape=(avail, GRID_H, GRID_W))
+    return np.memmap(path, dtype=">f4", mode="r", shape=(avail, int(rows), int(cols)))
 
 
 def integral(a: np.ndarray) -> np.ndarray:
@@ -115,12 +116,16 @@ def build_candidates(max_wg: int, max_hg: int, cols: int, rows: int,
 
 
 def image_features(grid: np.ndarray, src_w: int, src_h: int, aspect: float | None = None,
-                   keep: float = EVAL_MIN_KEEP, anchor: int = 0):
+                   keep: float = EVAL_MIN_KEEP, anchor: int = 0,
+                   cols: int = GRID_W, rows: int = GRID_H):
     """算出一张图所有候选框的「与权重无关」特征，外加基准框索引所需的分组信息。
+
+    cols/rows 默认 64×48（原行为逐位不变）；换分辨率时调用方必须传实际网格尺寸，
+    否则 grid 的 reshape 会按错的形状解析。
 
     返回 None 表示命中 Kotlin 的兜底分支（全 0 权重 / 参数非法），调用方应直接用居中最大框。
     """
-    cols, rows = GRID_W, GRID_H
+    cols, rows = int(cols), int(rows)
     # 1) 最大可用框（像素 → 格子），AutoFrame.kt:526-557
     #    aspect=None 表示 src 口径：Kotlin 取 (w.toFloat() / h.toFloat())，是 float32 除法
     ratio = f32(f32(src_w) / f32(src_h))
@@ -243,14 +248,15 @@ def pick(feat, score, gate="abs", gate_rel=ABS_GATE_MARGIN):
     return (best_i if adopted else base_i), adopted, base_i, base_score
 
 
-def to_pixels(feat, i: int, src_w: int, src_h: int):
-    """格子框 → 源图像素并夹进画面，AutoFrame.kt:672-682。"""
+def to_pixels(feat, i: int, src_w: int, src_h: int,
+              cols: int = GRID_W, rows: int = GRID_H):
+    """格子框 → 源图像素并夹进画面，AutoFrame.kt:672-682。cols/rows 默认 64×48（原行为不变）。"""
     xk = int(feat["xks"][i]); yk = int(feat["yks"][i])
     wk = int(feat["wks"][i]); hk = int(feat["hks"][i])
-    left = rti_scalar(xk * src_w / GRID_W)
-    top = rti_scalar(yk * src_h / GRID_H)
-    out_w = max(1, rti_scalar(wk * src_w / GRID_W))
-    out_h = max(1, rti_scalar(hk * src_h / GRID_H))
+    left = rti_scalar(xk * src_w / cols)
+    top = rti_scalar(yk * src_h / rows)
+    out_w = max(1, rti_scalar(wk * src_w / cols))
+    out_h = max(1, rti_scalar(hk * src_h / rows))
     left_c = min(max(0, left), max(0, src_w - 1))
     top_c = min(max(0, top), max(0, src_h - 1))
     width_c = min(max(1, out_w), max(1, src_w - left_c))

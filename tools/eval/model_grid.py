@@ -90,16 +90,43 @@ def preprocess(im: Image.Image, side: int = SIDE, norm: str = "imagenet",
     return np.ascontiguousarray(np.transpose(a, (2, 0, 1))[None, ...], dtype=np.float32)
 
 
+def _block_edges(dim: int, n: int) -> np.ndarray:
+    """复刻 mask_to_grid 的块边界：e[i]=i*dim//n，再强制严格递增（与逐格循环一致）。"""
+    e = np.empty(n + 1, dtype=np.int64)
+    e[0] = 0
+    for i in range(n):
+        e[i + 1] = max(e[i] + 1, (i + 1) * dim // n)
+    if e[n] > dim:
+        e[n] = dim
+    return e
+
+
 def mask_to_grid(mask: np.ndarray, cols: int = GRID_W, rows: int = GRID_H,
-                 side: int = None) -> np.ndarray:
+                 side: int = None, fast: bool = None) -> np.ndarray:
     """(side,side) 原始掩膜 → (rows,cols) 0..1 网格，与 SaliencyMath.maskToGrid 对齐。
-    side 默认取掩膜自己的边长（默认路径下即 320，与加参数之前一致）。"""
+    side 默认取掩膜自己的边长（默认路径下即 320，与加参数之前一致）。
+    fast：默认 64x48（cols*rows<=4096）走逐格循环——保证默认口径逐位不变；
+    更高分辨率用 reduceat 矢量化（float32 同精度，加和次序不同，末位可能有差）。"""
     if side is None:
         side = int(mask.shape[0])
     mn = float(mask.min())
     mx = float(mask.max())
     rng = mx - mn
     stretch = rng > 1e-6
+    if fast is None:
+        fast = cols * rows > 4096
+    if fast:
+        ye = _block_edges(side, rows)
+        xe = _block_edges(side, cols)
+        if stretch:
+            n = (mask - np.float32(mn)) / np.float32(rng)
+        else:
+            n = np.zeros(mask.shape, dtype=np.float32)
+        acc = np.add.reduceat(n, ye[:-1], axis=0)
+        acc = acc / np.diff(ye)[:, None].astype(np.float32)
+        acc = np.add.reduceat(acc, xe[:-1], axis=1)
+        acc = acc / np.diff(xe)[None, :].astype(np.float32)
+        return np.ascontiguousarray(acc, dtype=np.float32)
     out = np.zeros((rows, cols), dtype=np.float32)
     for r in range(rows):
         y0 = r * side // rows
@@ -171,6 +198,11 @@ def main() -> int:
                     help="输出是 logits 时先过 sigmoid（BiRefNet_lite 实测 -14.7..101.5）")
     ap.add_argument("--threads", type=int, default=2, help="onnxruntime 线程数，默认 2")
     ap.add_argument("--progress", type=int, default=0, help="每 N 张打一行进度，0＝不打")
+    # 以下两个是 2026-10-05 为"第 2 条：分辨率"加的，默认值＝原来的 64x48，不改默认行为
+    ap.add_argument("--grid-w", type=int, default=GRID_W, help="网格宽，默认 %d" % GRID_W)
+    ap.add_argument("--grid-h", type=int, default=GRID_H, help="网格高，默认 %d" % GRID_H)
+    ap.add_argument("--grids", default="",
+                    help="额外分辨率，如 '128x96,256x192'（主输出仍是 grids.bin/<grid-w>x<grid-h>）")
     args = ap.parse_args()
 
     try:
@@ -205,11 +237,28 @@ def main() -> int:
         print("清单里没有可用行: %s" % args.manifest)
         return 1
 
-    peaks = []
+    # 输出目标：主目标沿用 grids.bin/grids_manifest.tsv（--grid-w/--grid-h 定尺寸），
+    # --grids 里的额外分辨率写成 grids_<W>x<H>.bin / grids_<W>x<H>_manifest.tsv
+    targets = [(args.grid_w, args.grid_h, bin_path, man_path)]
+    for spec in (args.grids or "").split(","):
+        spec = spec.strip()
+        if not spec:
+            continue
+        gw, gh = (int(x) for x in spec.lower().split("x"))
+        targets.append((gw, gh,
+                        os.path.join(out_dir, "grids_%dx%d.bin" % (gw, gh)),
+                        os.path.join(out_dir, "grids_%dx%d_manifest.tsv" % (gw, gh))))
+
+    peaks = [[] for _ in targets]
     n_ok = 0
     n_fail = 0
-    with open(bin_path, "wb") as fb, open(man_path, "w", encoding="utf-8", newline="\n") as fm:
+    handles = []
+    for (_gw, _gh, bp, mp) in targets:
+        fb = open(bp, "wb")
+        fm = open(mp, "w", encoding="utf-8", newline="\n")
         fm.write("index\timage\tw\th\tpeak\n")
+        handles.append((fb, fm))
+    try:
         for parts in rows:
             path = parts[0]
             if not os.path.isfile(path):
@@ -229,33 +278,42 @@ def main() -> int:
                 n_fail += 1
                 continue
 
-            grid = mask_to_grid(mask, side=mask_resize)
-            fb.write(grid.astype(">f4").tobytes())
-            peak = float(grid.max())
-            peaks.append(peak)
-            fm.write("%d\t%s\t%d\t%d\t%.4f\n" % (n_ok, path, w, h, peak))
+            for ti, (gw, gh, _bp, _mp) in enumerate(targets):
+                grid = mask_to_grid(mask, cols=gw, rows=gh, side=mask_resize)
+                pk = float(grid.max())
+                handles[ti][0].write(grid.astype(">f4").tobytes())
+                peaks[ti].append(pk)
+                handles[ti][1].write("%d\t%s\t%d\t%d\t%.4f\n" % (n_ok, path, w, h, pk))
             n_ok += 1
             if args.progress and n_ok % args.progress == 0:
                 print("  %d/%d" % (n_ok, len(rows)), flush=True)
+    finally:
+        for fb, fm in handles:
+            fb.close()
+            fm.close()
 
-    if peaks:
-        arr = np.asarray(peaks)
+    for ti, (gw, gh, bp, mp) in enumerate(targets):
+        arr = np.asarray(peaks[ti])
+        if arr.size == 0:
+            continue
         below = int((arr < GRID_PEAK_GATE).sum())
         print(
-            "grids=%d skipped=%d bytes=%d\n"
+            "grids=%d skipped=%d bytes=%d  %dx%d\n"
             "  峰值 min=%.3f 中位=%.3f max=%.3f，低于门槛 %.2f 的有 %d 张（%.1f%%）\n  %s\n  %s"
             % (
                 n_ok,
                 n_fail,
-                n_ok * GRID_W * GRID_H * 4,
+                int(arr.size) * gw * gh * 4,
+                gw,
+                gh,
                 arr.min(),
                 float(np.median(arr)),
                 arr.max(),
                 GRID_PEAK_GATE,
                 below,
-                100.0 * below / len(arr),
-                bin_path,
-                man_path,
+                100.0 * below / arr.size,
+                bp,
+                mp,
             )
         )
     return 0 if n_ok > 0 else 1
